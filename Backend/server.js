@@ -27,261 +27,201 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Connect to MongoDB
 await mongoose.connect(process.env.MONGODB_URI);
 console.log("✅ Database connected");
 
 // ==================== TOOLS ====================
 
-// ---- Existing findEmployees (OR logic) ----
+// 1. find_employees (OR) – kept for backward compatibility
 const findEmployeesTool = tool(
   async ({ skills, maxWorkload = 100 }) => {
     try {
       const skillsArray = Array.isArray(skills) ? skills : [skills];
       const employees = await findEmployees(skillsArray, maxWorkload);
-
-      if (employees.length === 0) {
-        return "No employees found with the specified skills.";
-      }
-
-      const result = employees.map((emp) => ({
-        id: emp._id.toString(),
-        name: emp.name,
-        department: emp.department,
-        skills: emp.skills,
-        workload: `${emp.workload}%`,
-        availability: `${100 - emp.workload}%`,
-        email: emp.email,
-      }));
-
-      return JSON.stringify(result, null, 2);
+      if (employees.length === 0) return "No employees found with the specified skills.";
+      return JSON.stringify(
+        employees.map(emp => ({
+          id: emp._id.toString(),
+          name: emp.name,
+          department: emp.department,
+          skills: emp.skills,
+          workload: `${emp.workload}%`,
+          availability: `${100 - emp.workload}%`,
+          email: emp.email,
+        })),
+        null, 2
+      );
     } catch (error) {
       return `Error finding employees: ${error.message}`;
     }
   },
   {
     name: "find_employees",
-    description:
-      "Find employees by skills (any of the listed skills). Use this when the user asks for employees with at least one of the given skills.",
+    description: "Find employees with at least one of the given skills (OR logic).",
     schema: z.object({
-      skills: z
-        .array(z.string())
-        .describe("Array of skills to search for (e.g., ['React', 'Node.js'])"),
-      maxWorkload: z
-        .number()
-        .optional()
-        .default(100)
-        .describe("Maximum workload percentage (0-100), default is 100"),
+      skills: z.array(z.string()).describe("Array of skills (e.g., ['React', 'Node.js'])"),
+      maxWorkload: z.number().optional().default(100),
     }),
   }
 );
 
-// ---- NEW: find employees with ALL specified skills (AND logic) ----
+// 2. find_employees_exact (AND) – for multi‑skill queries
 const findEmployeesExactTool = tool(
   async ({ skills, maxWorkload = 100 }) => {
     try {
-      const skillsArray = Array.isArray(skills) ? skills : [skills];
-      const cleanSkills = skillsArray.filter(
-        (s) => typeof s === "string" && s.trim().length > 0
-      );
-      if (cleanSkills.length === 0) {
-        return "Please provide at least one valid skill.";
-      }
-
+      const clean = (Array.isArray(skills) ? skills : [skills])
+        .filter(s => typeof s === "string" && s.trim().length > 0);
+      if (clean.length === 0) return "Please provide at least one valid skill.";
       const employees = await Employee.find({
-        skills: { $all: cleanSkills },
+        skills: { $all: clean },
         workload: { $lte: maxWorkload },
       })
         .select("name department skills workload email")
         .sort({ workload: 1 })
         .limit(20)
         .lean();
-
       if (employees.length === 0) {
-        return `No employees found with all of the following skills: ${cleanSkills.join(", ")}`;
+        return `No employees found with all of these skills: ${clean.join(", ")}`;
       }
-
-      const result = employees.map((emp) => ({
-        id: emp._id.toString(),
-        name: emp.name,
-        department: emp.department,
-        skills: emp.skills,
-        workload: `${emp.workload}%`,
-        availability: `${100 - emp.workload}%`,
-        email: emp.email,
-      }));
-
-      return JSON.stringify(result, null, 2);
+      return JSON.stringify(
+        employees.map(emp => ({
+          id: emp._id.toString(),
+          name: emp.name,
+          department: emp.department,
+          skills: emp.skills,
+          workload: `${emp.workload}%`,
+          availability: `${100 - emp.workload}%`,
+          email: emp.email,
+        })),
+        null, 2
+      );
     } catch (error) {
-      return `Error finding employees: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
     name: "find_employees_exact",
-    description:
-      "Find employees who possess ALL of the specified skills (exact match). Use this when the user asks for employees with multiple skills simultaneously, e.g., 'React and Python'.",
+    description: "Find employees who possess ALL specified skills (AND logic). Use for queries like 'React and Python'.",
     schema: z.object({
-      skills: z
-        .array(z.string())
-        .describe("Array of skills that the employee must have all of"),
-      maxWorkload: z
-        .number()
-        .optional()
-        .default(100)
-        .describe("Maximum workload percentage (0-100), default is 100"),
+      skills: z.array(z.string()).describe("All skills the employee must have"),
+      maxWorkload: z.number().optional().default(100),
     }),
   }
 );
 
-// ---- All other tools (unchanged) ----
+// 3. add_employee
 const addEmployeeTool = tool(
   async ({ name, department, skills = [], workload = 0, email = "" }) => {
     try {
-      const existing = await Employee.findOne({
-        $or: [{ email: email || null }, { name, department }],
-      });
-      if (existing) {
-        return `Employee "${name}" already exists (${existing.department}). Use update if needed.`;
-      }
-
-      const employee = await Employee.create({
-        name,
-        department,
-        skills,
-        workload,
-        email: email || undefined,
-      });
-
-      return `✅ Employee "${employee.name}" added successfully!\nDepartment: ${employee.department}\nSkills: ${employee.skills.join(", ") || "None"}\nWorkload: ${employee.workload}%`;
+      const existing = await Employee.findOne({ $or: [{ email: email || null }, { name, department }] });
+      if (existing) return `Employee "${name}" already exists (${existing.department}).`;
+      const employee = await Employee.create({ name, department, skills, workload, email: email || undefined });
+      return `✅ Employee "${employee.name}" added.\nDepartment: ${employee.department}\nSkills: ${employee.skills.join(", ") || "None"}\nWorkload: ${employee.workload}%`;
     } catch (error) {
-      return `Error adding employee: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
     name: "add_employee",
-    description:
-      "Add a new employee to the database. Use this when the user wants to register a new team member with their skills, department, and workload.",
+    description: "Add a new employee.",
     schema: z.object({
-      name: z.string().describe("Employee's full name"),
-      department: z.string().describe("Department (e.g., Engineering, Design)"),
-      skills: z
-        .array(z.string())
-        .optional()
-        .default([])
-        .describe("List of skills the employee has"),
-      workload: z
-        .number()
-        .optional()
-        .default(0)
-        .describe("Current workload percentage (0-100)"),
-      email: z.string().email().optional().default("").describe("Email address"),
+      name: z.string(),
+      department: z.string(),
+      skills: z.array(z.string()).optional().default([]),
+      workload: z.number().optional().default(0),
+      email: z.string().email().optional().default(""),
     }),
   }
 );
 
+// 4. update_employee
 const updateEmployeeTool = tool(
   async ({ employee_name, department, skills, workload, email }) => {
     try {
       const query = { name: employee_name };
       if (department) query.department = department;
-
       const updates = {};
       if (skills !== undefined) updates.skills = skills;
       if (workload !== undefined) updates.workload = workload;
       if (email !== undefined) updates.email = email;
       if (department) updates.department = department;
-
-      if (Object.keys(updates).length === 0) {
-        return "No fields provided to update. Specify skills, workload, email, or department.";
-      }
-
-      const employee = await Employee.findOneAndUpdate(query, updates, {
-        new: true,
-        runValidators: true,
-      });
-
-      if (!employee) {
-        return `Employee "${employee_name}" not found${department ? ` in ${department}` : ""}.`;
-      }
-
-      return `✅ Employee "${employee.name}" updated. Current details:\nDepartment: ${employee.department}\nSkills: ${employee.skills.join(", ") || "None"}\nWorkload: ${employee.workload}%\nEmail: ${employee.email || "Not set"}`;
+      if (Object.keys(updates).length === 0) return "No fields to update.";
+      const employee = await Employee.findOneAndUpdate(query, updates, { new: true, runValidators: true });
+      if (!employee) return `Employee "${employee_name}" not found.`;
+      return `✅ Updated ${employee.name}.\nDepartment: ${employee.department}\nSkills: ${employee.skills.join(", ") || "None"}\nWorkload: ${employee.workload}%\nEmail: ${employee.email || "Not set"}`;
     } catch (error) {
-      return `Error updating employee: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
     name: "update_employee",
-    description:
-      "Update an employee's skills, department, workload, or email. Use this when employee details need to be changed.",
+    description: "Update employee details.",
     schema: z.object({
-      employee_name: z.string().describe("Full name of the employee"),
-      department: z
-        .string()
-        .optional()
-        .describe(
-          "Current department (to disambiguate if multiple employees share the same name)"
-        ),
-      skills: z
-        .array(z.string())
-        .optional()
-        .describe("New list of skills (replaces existing)"),
-      workload: z
-        .number()
-        .optional()
-        .describe("New workload percentage (0-100)"),
-      email: z.string().email().optional().describe("New email address"),
+      employee_name: z.string(),
+      department: z.string().optional(),
+      skills: z.array(z.string()).optional(),
+      workload: z.number().optional(),
+      email: z.string().email().optional(),
     }),
   }
 );
 
+// 5. delete_employee
 const deleteEmployeeTool = tool(
   async ({ employee_name, department }) => {
     try {
       const query = { name: employee_name };
       if (department) query.department = department;
-
-      const projectsWithEmployee = await Project.find({
-        $or: [
-          { team: employee_name },
-          { "tasks.assigned_to": employee_name },
-        ],
-      });
-
-      if (projectsWithEmployee.length > 0) {
-        const projectNames = projectsWithEmployee.map((p) => p.name).join(", ");
-        return `⚠️ Cannot delete "${employee_name}" because they are assigned to projects: ${projectNames}. Remove them from those projects first.`;
+      const assigned = await Project.find({ $or: [{ team: employee_name }, { "tasks.assigned_to": employee_name }] });
+      if (assigned.length > 0) {
+        const names = assigned.map(p => p.name).join(", ");
+        return `⚠️ Cannot delete - assigned to projects: ${names}. Remove first.`;
       }
-
       const result = await Employee.findOneAndDelete(query);
-      if (!result) {
-        return `Employee "${employee_name}" not found${department ? ` in ${department}` : ""}.`;
-      }
-
-      return `✅ Employee "${result.name}" (${result.department}) deleted successfully.`;
+      if (!result) return `Employee "${employee_name}" not found.`;
+      return `✅ Deleted ${result.name} (${result.department}).`;
     } catch (error) {
-      return `Error deleting employee: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
     name: "delete_employee",
-    description:
-      "Remove an employee from the database. Only works if they are not assigned to any project or task.",
+    description: "Delete an employee (only if not assigned to any project/task).",
     schema: z.object({
-      employee_name: z.string().describe("Full name of the employee to delete"),
-      department: z
-        .string()
-        .optional()
-        .describe(
-          "Department to disambiguate employees with the same name"
-        ),
+      employee_name: z.string(),
+      department: z.string().optional(),
     }),
   }
 );
 
+// 6. create_project
+const createProjectTool = tool(
+  async ({ name, description, required_skills = [], timeline, budget }) => {
+    try {
+      const project = await createProject({ name, description, required_skills, timeline, budget });
+      if (!project) return "Failed to create project (maybe duplicate or invalid).";
+      return `✅ Project "${project.name}" created.\nDescription: ${project.description}\nSkills: ${project.required_skills.join(", ")}`;
+    } catch (error) {
+      return `Error: ${error.message}`;
+    }
+  },
+  {
+    name: "create_project",
+    description: "Create a new project.",
+    schema: z.object({
+      name: z.string(),
+      description: z.string(),
+      required_skills: z.array(z.string()).optional().default([]),
+      timeline: z.string().optional(),
+      budget: z.string().optional(),
+    }),
+  }
+);
+
+// 7. update_project
 const updateProjectTool = tool(
   async ({ project_name, new_name, description, required_skills, status, timeline, budget }) => {
     try {
@@ -289,314 +229,117 @@ const updateProjectTool = tool(
       const updates = {};
       if (new_name) updates.name = new_name;
       if (description !== undefined) updates.description = description;
-      if (required_skills !== undefined)
-        updates.required_skills = Array.isArray(required_skills)
-          ? required_skills
-          : [required_skills];
+      if (required_skills !== undefined) updates.required_skills = Array.isArray(required_skills) ? required_skills : [required_skills];
       if (status) {
-        const validStatuses = [
-          "planning",
-          "in-progress",
-          "completed",
-          "on-hold",
-        ];
-        if (!validStatuses.includes(status)) {
-          return `Invalid status. Use: ${validStatuses.join(", ")}`;
-        }
+        const valid = ["planning", "in-progress", "completed", "on-hold"];
+        if (!valid.includes(status)) return `Invalid status. Use: ${valid.join(", ")}`;
         updates.status = status;
       }
       if (timeline !== undefined) updates.timeline = timeline;
       if (budget !== undefined) updates.budget = budget;
-
-      if (Object.keys(updates).length === 0) {
-        return "No fields provided to update. Specify new_name, description, required_skills, or status.";
-      }
-
-      const project = await Project.findOneAndUpdate(query, updates, {
-        new: true,
-        runValidators: true,
-      });
-
+      if (Object.keys(updates).length === 0) return "No fields to update.";
+      const project = await Project.findOneAndUpdate(query, updates, { new: true, runValidators: true });
       if (!project) return `Project "${project_name}" not found.`;
-
-      return `✅ Project "${project.name}" updated:\nDescription: ${project.description}\nStatus: ${project.status}\nRequired Skills: ${project.required_skills.join(", ")}${updates.timeline !== undefined ? `\nTimeline: ${project.timeline}` : ""}${updates.budget !== undefined ? `\nBudget: ${project.budget}` : ""}`;
+      return `✅ Updated "${project.name}".\nStatus: ${project.status}\nSkills: ${project.required_skills.join(", ")}`;
     } catch (error) {
-      return `Error updating project: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
     name: "update_project",
-    description:
-      "Update a project's name, description, required skills, or status.",
+    description: "Update project details or status.",
     schema: z.object({
-      project_name: z.string().describe("Current name of the project"),
-      new_name: z.string().optional().describe("New project name (if renaming)"),
-      description: z.string().optional().describe("Updated description"),
-      required_skills: z
-        .array(z.string())
-        .optional()
-        .describe("Updated list of required skills"),
-      status: z
-        .string()
-        .optional()
-        .describe(
-          "New status: planning, in-progress, completed, on-hold"
-        ),
-      timeline: z.string().optional().describe("Updated project timeline"),
-      budget: z.string().optional().describe("Updated project budget"),
+      project_name: z.string(),
+      new_name: z.string().optional(),
+      description: z.string().optional(),
+      required_skills: z.array(z.string()).optional(),
+      status: z.string().optional(),
+      timeline: z.string().optional(),
+      budget: z.string().optional(),
     }),
   }
 );
 
-// ===== DELETE PROJECT TOOL =====
+// 8. delete_project
 const deleteProjectTool = tool(
   async ({ project_name }) => {
     try {
       const project = await Project.findOne({ name: project_name });
-      if (!project) {
-        return `Project "${project_name}" not found.`;
-      }
+      if (!project) return `Project "${project_name}" not found.`;
       await Project.deleteOne({ name: project_name });
-      return `✅ Project "${project_name}" deleted successfully.`;
+      return `✅ Project "${project_name}" deleted.`;
     } catch (error) {
-      return `Error deleting project: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
     name: "delete_project",
-    description:
-      "Delete a project from the database. Use this when the user wants to remove a project entirely.",
-    schema: z.object({
-      project_name: z.string().describe("Name of the project to delete"),
-    }),
+    description: "Delete a project permanently.",
+    schema: z.object({ project_name: z.string() }),
   }
 );
 
-// ===== AUTO-ASSIGN TASKS TOOL =====
-const autoAssignTasksTool = tool(
-  async ({ project_name }) => {
+// 9. assign_team
+const assignTeamTool = tool(
+  async ({ project_name, team_members }) => {
     try {
-      const project = await Project.findOne({ name: project_name });
-      if (!project) {
-        return `Project "${project_name}" not found.`;
-      }
-      if (!project.tasks || project.tasks.length === 0) {
-        return `Project "${project_name}" has no tasks to assign.`;
-      }
-
-      const employees = await Employee.find();
-      const results = [];
-
-      for (const task of project.tasks) {
-        if (task.assigned_to) {
-          results.push(`Task "${task.description}" already assigned to ${task.assigned_to}.`);
-          continue;
-        }
-
-        const taskLower = task.description.toLowerCase();
-        const skillsNeeded = project.required_skills.filter(skill =>
-          taskLower.includes(skill.toLowerCase())
-        );
-        const searchSkills = skillsNeeded.length > 0 ? skillsNeeded : project.required_skills;
-
-        if (searchSkills.length === 0) {
-          results.push(`No skills defined for task "${task.description}" – skipping.`);
-          continue;
-        }
-
-        const candidates = employees
-          .filter(emp => emp.skills.some(s => searchSkills.includes(s)))
-          .sort((a, b) => a.workload - b.workload);
-
-        if (candidates.length === 0) {
-          results.push(`No employee found with required skills for task "${task.description}".`);
-          continue;
-        }
-
-        const best = candidates[0];
-        task.assigned_to = best.name;
-        task.status = "in-progress";
-        best.workload = Math.min(100, best.workload + 10);
-        await best.save();
-
-        results.push(`✅ Assigned "${task.description}" → ${best.name} (workload now ${best.workload}%)`);
-      }
-
-      await project.save();
-      return `Auto‑assignment completed for "${project_name}":\n${results.join("\n")}`;
+      const project = await assignTeam(project_name, Array.isArray(team_members) ? team_members : [team_members]);
+      if (!project) return "Failed to assign team. Check project and employee names.";
+      return `✅ Team assigned to "${project.name}": ${project.team.join(", ")}\nStatus: ${project.status}`;
     } catch (error) {
-      return `Error in auto‑assignment: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
-    name: "auto_assign_tasks",
-    description:
-      "Automatically assign all unassigned tasks of a project to the best‑matched employees (based on skills and workload), and update their status to 'in-progress'. Use this when the user wants to bulk‑assign tasks.",
+    name: "assign_team",
+    description: "Add team members to a project.",
     schema: z.object({
-      project_name: z.string().describe("Name of the project whose tasks should be auto‑assigned"),
+      project_name: z.string(),
+      team_members: z.array(z.string()),
     }),
   }
 );
 
+// 10. remove_team_member
 const removeTeamMemberTool = tool(
   async ({ project_name, employee_name }) => {
     try {
       const project = await Project.findOne({ name: project_name });
       if (!project) return `Project "${project_name}" not found.`;
-
-      const initialLength = project.team.length;
-      project.team = project.team.filter((name) => name !== employee_name);
-
-      let unassignedTasks = 0;
+      const initial = project.team.length;
+      project.team = project.team.filter(name => name !== employee_name);
+      let unassigned = 0;
       if (project.tasks) {
-        project.tasks.forEach((task) => {
+        project.tasks.forEach(task => {
           if (task.assigned_to === employee_name) {
             task.assigned_to = null;
-            unassignedTasks++;
+            unassigned++;
           }
         });
       }
-
-      if (project.team.length === initialLength) {
-        return `Employee "${employee_name}" was not in the team of "${project_name}".`;
-      }
-
+      if (project.team.length === initial) return `Employee "${employee_name}" not in team.`;
       await project.save();
-      return `✅ Removed "${employee_name}" from "${project_name}".${unassignedTasks > 0 ? ` Also unassigned from ${unassignedTasks} task(s).` : ""}`;
+      return `✅ Removed "${employee_name}" from "${project_name}".${unassigned > 0 ? ` Unassigned from ${unassigned} task(s).` : ""}`;
     } catch (error) {
-      return `Error removing team member: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
     name: "remove_team_member",
-    description:
-      "Remove an employee from a project's team and unassign them from all tasks in that project.",
+    description: "Remove an employee from a project team and unassign their tasks.",
     schema: z.object({
-      project_name: z.string().describe("Project name"),
-      employee_name: z.string().describe("Employee name to remove"),
+      project_name: z.string(),
+      employee_name: z.string(),
     }),
   }
 );
 
-const deleteTaskTool = tool(
-  async ({ project_name, task_number }) => {
-    try {
-      const project = await Project.findOne({ name: project_name });
-      if (!project) return `Project "${project_name}" not found.`;
-      if (!project.tasks || project.tasks.length === 0)
-        return `Project "${project_name}" has no tasks.`;
-
-      const index = task_number - 1;
-      if (index < 0 || index >= project.tasks.length) {
-        return `Invalid task number. There are ${project.tasks.length} task(s).`;
-      }
-
-      const removedTask = project.tasks.splice(index, 1)[0];
-      await project.save();
-
-      return `✅ Deleted task: "${removedTask.description}" from "${project_name}".`;
-    } catch (error) {
-      return `Error deleting task: ${error.message}`;
-    }
-  },
-  {
-    name: "delete_task",
-    description:
-      "Delete a specific task from a project by its number (1-based).",
-    schema: z.object({
-      project_name: z.string().describe("Project name"),
-      task_number: z.number().describe("Task number (starting from 1) to delete"),
-    }),
-  }
-);
-
-const createProjectTool = tool(
-  async ({ name, description, required_skills = [], timeline, budget }) => {
-    try {
-      const project = await createProject({
-        name,
-        description,
-        required_skills: Array.isArray(required_skills)
-          ? required_skills
-          : [required_skills],
-        timeline,
-        budget,
-      });
-
-      if (!project) {
-        return "Failed to create project. It might already exist or have invalid data.";
-      }
-
-      return `✅ Project "${
-        project.name
-      }" created successfully!\nDescription: ${
-        project.description
-      }\nRequired Skills: ${project.required_skills.join(", ")}`;
-    } catch (error) {
-      return `Error creating project: ${error.message}`;
-    }
-  },
-  {
-    name: "create_project",
-    description:
-      "Create a new project with name, description, and required skills. Use this when the user wants to create or start a new project.",
-    schema: z.object({
-      name: z.string().describe("Project name"),
-      description: z.string().describe("Detailed project description"),
-      required_skills: z
-        .array(z.string())
-        .optional()
-        .default([])
-        .describe("Array of required skills for the project"),
-      timeline: z.string().optional().describe("Optional project timeline"),
-      budget: z.string().optional().describe("Optional project budget"),
-    }),
-  }
-);
-
-const assignTeamTool = tool(
-  async ({ project_name, team_members }) => {
-    try {
-      const teamArray = Array.isArray(team_members)
-        ? team_members
-        : [team_members];
-      const project = await assignTeam(project_name, teamArray);
-
-      if (!project) {
-        return "Failed to assign team. Project might not exist or employees not found.";
-      }
-
-      return `✅ Team assigned to "${project.name}": ${project.team.join(
-        ", "
-      )}\nProject status: ${project.status}`;
-    } catch (error) {
-      return `Error assigning team: ${error.message}`;
-    }
-  },
-  {
-    name: "assign_team",
-    description:
-      "Assign a team of employees to a project. Use this when the user wants to add team members to a project.",
-    schema: z.object({
-      project_name: z
-        .string()
-        .describe("Name of the project to assign team to"),
-      team_members: z
-        .array(z.string())
-        .describe("Array of employee names to assign to the project"),
-    }),
-  }
-);
-
+// 11. get_project_status
 const getProjectStatusTool = tool(
   async ({ project_name }) => {
     try {
       const project = await getProjectStatus(project_name);
-
-      if (!project) {
-        return `Project "${project_name}" not found.`;
-      }
-
+      if (!project) return `Project "${project_name}" not found.`;
       const status = {
         id: project._id.toString(),
         name: project.name,
@@ -604,268 +347,256 @@ const getProjectStatusTool = tool(
         status: project.status,
         required_skills: project.required_skills,
         team: project.team,
-        tasks: project.tasks
-          ? project.tasks.map((task) => ({
-              description: task.description,
-              status: task.status,
-              assigned_to: task.assigned_to || "Unassigned",
-            }))
-          : [],
+        tasks: project.tasks?.map(t => ({ description: t.description, status: t.status, assigned_to: t.assigned_to || "Unassigned" })) || [],
         created: project.createdAt.toLocaleDateString(),
       };
-
       return JSON.stringify(status, null, 2);
     } catch (error) {
-      return `Error getting project status: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
     name: "get_project_status",
-    description:
-      "Get detailed status of a project including team and tasks. Use this when the user asks about project details or status.",
-    schema: z.object({
-      project_name: z.string().describe("Name of the project to check"),
-    }),
+    description: "Get full project details including tasks.",
+    schema: z.object({ project_name: z.string() }),
   }
 );
 
+// 12. generate_tasks
 const generateTasksTool = tool(
   async ({ project_name, num_tasks = 3 }) => {
     try {
       const project = await generateTasksForProject(project_name, num_tasks);
-
-      if (!project) {
-        return "Failed to generate tasks. Project might not exist.";
-      }
-
-      const tasks = project.tasks
-        .map(
-          (task, index) => `${index + 1}. ${task.description} [${task.status}]`
-        )
-        .join("\n");
-
-      return `✅ Generated ${project.tasks.length} tasks for "${project_name}":\n${tasks}`;
+      if (!project) return `Failed to generate tasks for "${project_name}".`;
+      const taskList = project.tasks.map((t, i) => `${i+1}. ${t.description} [${t.status}]`).join("\n");
+      return `✅ Generated ${project.tasks.length} tasks:\n${taskList}`;
     } catch (error) {
-      return `Error generating tasks: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
     name: "generate_tasks",
-    description:
-      "Generate tasks for a project based on its description. Use this when the user wants to create or add tasks to a project.",
+    description: "Auto‑generate tasks for a project based on its description.",
     schema: z.object({
-      project_name: z
-        .string()
-        .describe("Name of the project to generate tasks for"),
-      num_tasks: z
-        .number()
-        .optional()
-        .default(3)
-        .describe("Number of tasks to generate (default: 3)"),
+      project_name: z.string(),
+      num_tasks: z.number().optional().default(3),
     }),
   }
 );
 
+// 13. assign_task
 const assignTaskTool = tool(
   async ({ project_name, task_number, employee_name }) => {
     try {
-      const project = await assignTask(
-        project_name,
-        task_number,
-        employee_name
-      );
-
-      if (!project) {
-        return "Failed to assign task. Check if project, task, and employee exist.";
-      }
-
+      const project = await assignTask(project_name, task_number, employee_name);
+      if (!project) return "Assignment failed. Check project, task number, and employee.";
       const task = project.tasks[task_number - 1];
-      return `✅ Task assigned: "${task.description}" → ${employee_name}`;
+      return `✅ Task "${task.description}" assigned to ${employee_name}.`;
     } catch (error) {
-      return `Error assigning task: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
     name: "assign_task",
-    description:
-      "Assign a specific task to an employee. Use this when the user wants to assign a task to a team member.",
+    description: "Assign a specific task (by number) to an employee.",
     schema: z.object({
-      project_name: z.string().describe("Name of the project"),
-      task_number: z.number().describe("Task number (starting from 1)"),
-      employee_name: z
-        .string()
-        .describe("Name of the employee to assign the task to"),
+      project_name: z.string(),
+      task_number: z.number(),
+      employee_name: z.string(),
     }),
   }
 );
 
+// 14. update_task_status
 const updateTaskStatusTool = tool(
   async ({ project_name, task_number, new_status }) => {
     try {
-      const validStatuses = ["pending", "in-progress", "completed", "blocked"];
-      if (!validStatuses.includes(new_status)) {
-        return `Invalid status. Must be one of: ${validStatuses.join(", ")}`;
-      }
-
-      const project = await updateTaskStatus(
-        project_name,
-        task_number,
-        new_status
-      );
-
-      if (!project) {
-        return "Failed to update task status.";
-      }
-
+      const valid = ["pending", "in-progress", "completed", "blocked"];
+      if (!valid.includes(new_status)) return `Invalid status. Use: ${valid.join(", ")}`;
+      const project = await updateTaskStatus(project_name, task_number, new_status);
+      if (!project) return "Update failed.";
       const task = project.tasks[task_number - 1];
-      return `✅ Task status updated: "${task.description}" → ${new_status}`;
+      return `✅ Task "${task.description}" status → ${new_status}.`;
     } catch (error) {
-      return `Error updating task status: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
     name: "update_task_status",
-    description:
-      "Update the status of a task. Use this when the user wants to change a task's status.",
+    description: "Change a task's status.",
     schema: z.object({
-      project_name: z.string().describe("Name of the project"),
-      task_number: z.number().describe("Task number (starting from 1)"),
-      new_status: z
-        .string()
-        .describe("New status: pending, in-progress, completed, or blocked"),
+      project_name: z.string(),
+      task_number: z.number(),
+      new_status: z.string(),
     }),
   }
 );
 
+// 15. delete_task
+const deleteTaskTool = tool(
+  async ({ project_name, task_number }) => {
+    try {
+      const project = await Project.findOne({ name: project_name });
+      if (!project) return `Project "${project_name}" not found.`;
+      if (!project.tasks || project.tasks.length === 0) return `No tasks in "${project_name}".`;
+      const idx = task_number - 1;
+      if (idx < 0 || idx >= project.tasks.length) return `Invalid task number (1-${project.tasks.length}).`;
+      const removed = project.tasks.splice(idx, 1)[0];
+      await project.save();
+      return `✅ Deleted task: "${removed.description}" from "${project_name}".`;
+    } catch (error) {
+      return `Error: ${error.message}`;
+    }
+  },
+  {
+    name: "delete_task",
+    description: "Delete a specific task by its number.",
+    schema: z.object({
+      project_name: z.string(),
+      task_number: z.number(),
+    }),
+  }
+);
+
+// 16. propose_team
 const proposeTeamTool = tool(
-  async ({ project_description, project_name = null }) => {
+  async ({ project_description }) => {
     try {
       const result = await proposeTeamSimple(project_description);
-
-      if (!result.success) {
-        return `No suitable team found: ${result.message}`;
-      }
-
-      const teamInfo = result.proposedTeam
-        .map(
-          (emp) =>
-            `- ${emp.name} (id: ${emp._id.toString()}, ${
-              emp.matchScore
-            }% match): ${emp.matchingSkills.join(", ")}`
-        )
-        .join("\n");
-
-      return `💡 Team Proposal (${
-        result.skillsCoverage
-      }% skills coverage):\n${teamInfo}\n\nRequired Skills: ${result.requiredSkills.join(
-        ", "
-      )}`;
+      if (!result.success) return `No suitable team found: ${result.message}`;
+      const teamInfo = result.proposedTeam.map(emp =>
+        `- ${emp.name} (${emp.matchScore}% match): ${emp.matchingSkills.join(", ")}`
+      ).join("\n");
+      return `💡 Team Proposal (${result.skillsCoverage}% coverage):\n${teamInfo}\nRequired Skills: ${result.requiredSkills.join(", ")}`;
     } catch (error) {
-      return `Error proposing team: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
     name: "propose_team",
-    description:
-      "Propose a team for a project based on description. Use this when the user wants suggestions for team members based on project requirements.",
+    description: "Suggest a team based on a project description.",
     schema: z.object({
-      project_description: z
-        .string()
-        .describe(
-          "Project description to extract skills from and find matching team members"
-        ),
-      project_name: z
-        .string()
-        .optional()
-        .describe("Optional project name for reference"),
+      project_description: z.string(),
     }),
   }
 );
 
+// 17. list_projects
 const listProjectsTool = tool(
   async () => {
     try {
-      const projects = await Project.find().sort({ createdAt: -1 });
-
-      if (projects.length === 0) {
-        return "No projects found.";
-      }
-
-      const projectList = projects
-        .map(
-          (project, index) =>
-            `${index + 1}. ${project.name} (id: ${project._id.toString()}, ${project.status}) - Team: ${
-              project.team.join(", ") || "None"
-            } - Tasks: ${project.tasks ? project.tasks.length : 0}`
-        )
-        .join("\n");
-
-      return `📂 All Projects (${projects.length}):\n${projectList}`;
+      const projects = await Project.find().sort({ createdAt: -1 }).lean();
+      if (projects.length === 0) return "No projects found.";
+      const list = projects.map((p, i) =>
+        `${i+1}. ${p.name} (${p.status}) - Team: ${p.team.join(", ") || "None"} - Tasks: ${p.tasks?.length || 0}`
+      ).join("\n");
+      return `📂 All Projects (${projects.length}):\n${list}`;
     } catch (error) {
-      return `Error listing projects: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
     name: "list_projects",
-    description:
-      "List all projects with their status and team information. Use this when the user wants to see all projects.",
+    description: "List all projects with basic info.",
     schema: z.object({}),
   }
 );
 
+// 18. list_employees
 const listEmployeesTool = tool(
   async () => {
     try {
-      const employees = await Employee.find().sort({ department: 1, name: 1 });
-
-      const employeeList = employees
-        .map(
-          (emp) =>
-            `- ${emp.name} (id: ${emp._id.toString()}, ${emp.department}): ${emp.skills.join(", ")} - ${
-              emp.workload
-            }% workload`
-        )
-        .join("\n");
-
-      return `👨‍💼 All Employees (${employees.length}):\n${employeeList}`;
+      const employees = await Employee.find().sort({ department: 1, name: 1 }).lean();
+      if (employees.length === 0) return "No employees found.";
+      const list = employees.map(emp =>
+        `- ${emp.name} (${emp.department}): ${emp.skills.join(", ")} - ${emp.workload}% workload`
+      ).join("\n");
+      return `👨‍💼 All Employees (${employees.length}):\n${list}`;
     } catch (error) {
-      return `Error listing employees: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
     name: "list_employees",
-    description:
-      "List all employees with their skills and workload. Use this when the user wants to see all available employees.",
+    description: "List all employees with skills and workload.",
     schema: z.object({}),
+  }
+);
+
+// 19. auto_assign_tasks (bulk assignment + status update)
+const autoAssignTasksTool = tool(
+  async ({ project_name }) => {
+    try {
+      const project = await Project.findOne({ name: project_name });
+      if (!project) return `Project "${project_name}" not found.`;
+      if (!project.tasks || project.tasks.length === 0) return `No tasks in "${project_name}".`;
+
+      const employees = await Employee.find();
+      const results = [];
+      for (const task of project.tasks) {
+        if (task.assigned_to) {
+          results.push(`Task "${task.description}" already assigned to ${task.assigned_to}.`);
+          continue;
+        }
+        const taskLower = task.description.toLowerCase();
+        const skillsNeeded = project.required_skills.filter(s => taskLower.includes(s.toLowerCase()));
+        const searchSkills = skillsNeeded.length > 0 ? skillsNeeded : project.required_skills;
+        if (searchSkills.length === 0) {
+          results.push(`No skills for task "${task.description}" – skipping.`);
+          continue;
+        }
+        const candidates = employees
+          .filter(emp => emp.skills.some(s => searchSkills.includes(s)))
+          .sort((a, b) => a.workload - b.workload);
+        if (candidates.length === 0) {
+          results.push(`No employee for task "${task.description}".`);
+          continue;
+        }
+        const best = candidates[0];
+        task.assigned_to = best.name;
+        task.status = "in-progress";
+        best.workload = Math.min(100, best.workload + 10);
+        await best.save();
+        results.push(`✅ "${task.description}" → ${best.name} (workload ${best.workload}%)`);
+      }
+      await project.save();
+      return `Auto‑assignment done for "${project_name}":\n${results.join("\n")}`;
+    } catch (error) {
+      return `Error: ${error.message}`;
+    }
+  },
+  {
+    name: "auto_assign_tasks",
+    description: "Assign all unassigned tasks to the best‑matched employees and set status to 'in‑progress'.",
+    schema: z.object({
+      project_name: z.string(),
+    }),
   }
 );
 
 // ==================== AI AGENT SETUP ====================
 
 if (!process.env.GROQ_API_KEY) {
-  console.error(
-    "❌ GROQ_API_KEY is not set. Add it to Backend/.env before starting the server."
-  );
+  console.error("❌ GROQ_API_KEY missing. Set it in .env");
   process.exit(1);
 }
 
-const SYSTEM_PROMPT = `You are HR Team Builder AI, an elite corporate staffing consultant and organizational architect.
+const SYSTEM_PROMPT = `You are HR Team Builder AI, a corporate staffing consultant.
 
-Your job is to help resource managers, tech leads, and HR directors build optimal project teams, analyze talent distribution, and explore employee credentials, using the live company database via your tools. Never invent employees, projects, skills, or ids — always call the appropriate tool to look up real, current data before answering.
-
-BEHAVIORAL PROTOCOLS:
-1. Always base your recommendations on real data returned by your tools (find_employees, find_employees_exact, list_employees, list_projects, get_project_status, propose_team, etc). Call a tool whenever you need current information instead of guessing.
-2. If suggesting teams, match required roles to employee skills, considering their availability percentage and current workload.
-3. Be professional, direct, and collaborative. Use structured markdown (bolding, bullet points, brief profiles, comparison tables) where helpful.
-4. When you recommend or reference specific employees or projects, use their exact names as returned by the tools.
-5. Whenever your response recommends or highlights specific employees or projects, end your response with a special JSON block using the exact ids returned by your tools (e.g. from the "id:" field in tool output):
-\`\`\`json-talent-recommendation
-{
-  "employeeIds": ["<employee _id from tool output>"],
-  "projectIds": ["<project _id from tool output>"]
-}
-\`\`\`
-   Only include this block when you are recommending specific people or projects, and only use ids that came directly from tool results — never fabricate an id.`;
+CRITICAL RULES:
+1. **Always use a tool** to get real data. Never guess or invent employees/projects/skills.
+2. **Prefer the most specific tool** for the user's request:
+   - "update project status" → update_project
+   - "delete project" → delete_project
+   - "assign all tasks automatically" → auto_assign_tasks
+   - "find employees with React and Python" → find_employees_exact
+   - "find employees with React or Python" → find_employees
+   - "propose a team" → propose_team
+3. **After a tool returns a result**, respond concisely with the information.
+4. **Do not ask for clarification** unless absolutely necessary.
+5. **If you are unsure**, call list_projects or list_employees to see what's available.
+6. **Do not perform multi‑step reasoning** — each tool call should solve a specific sub‑task. If you need to perform multiple actions, call them in sequence but avoid loops.
+7. **End your response** with a JSON block if you recommend specific employees/projects (using ids from tool output).`;
 
 const llm = new ChatGroq({
   model: "openai/gpt-oss-120b",
@@ -875,14 +606,13 @@ const llm = new ChatGroq({
 
 const tools = [
   findEmployeesTool,
-  findEmployeesExactTool,   // NEW: AND logic
+  findEmployeesExactTool,
   addEmployeeTool,
   updateEmployeeTool,
   deleteEmployeeTool,
   createProjectTool,
   updateProjectTool,
   deleteProjectTool,
-  autoAssignTasksTool,
   assignTeamTool,
   removeTeamMemberTool,
   getProjectStatusTool,
@@ -893,6 +623,7 @@ const tools = [
   proposeTeamTool,
   listProjectsTool,
   listEmployeesTool,
+  autoAssignTasksTool,
 ];
 
 const checkpointer = new MemorySaver();
@@ -906,18 +637,20 @@ function createAgent() {
   });
 }
 
-// ==================== ROUTES ====================
+// ==================== CHAT ENDPOINT ====================
 
 app.post("/api/chat", async (req, res) => {
   try {
     const { message, threadId = "default-thread" } = req.body;
-
-    if (!message) {
-      return res.status(400).json({ error: "Message is required" });
-    }
+    if (!message) return res.status(400).json({ error: "Message is required" });
 
     const agent = createAgent();
-    const config = { configurable: { thread_id: threadId } };
+    const config = {
+      configurable: {
+        thread_id: threadId,
+        recursion_limit: 10, // prevent infinite loops
+      },
+    };
 
     let fullResponse = "";
     let toolCalls = [];
@@ -929,16 +662,14 @@ app.post("/api/chat", async (req, res) => {
 
     const streamPromise = (async () => {
       const stream = await agent.stream(
-        {
-          messages: [{ role: "user", content: message }],
-        },
+        { messages: [{ role: "user", content: message }] },
         config
       );
 
       for await (const chunk of stream) {
         if (chunk.agent) {
-          const messages = chunk.agent.messages;
-          for (const msg of messages) {
+          const msgs = chunk.agent.messages;
+          for (const msg of msgs) {
             if (msg.content) {
               fullResponse += msg.content;
               hasFinalResponse = true;
@@ -946,8 +677,8 @@ app.post("/api/chat", async (req, res) => {
           }
         }
         if (chunk.tools) {
-          const messages = chunk.tools.messages;
-          for (const msg of messages) {
+          const msgs = chunk.tools.messages;
+          for (const msg of msgs) {
             if (msg.content) {
               toolCalls.push(msg.content);
             }
@@ -959,19 +690,21 @@ app.post("/api/chat", async (req, res) => {
     await Promise.race([streamPromise, timeoutPromise]);
 
     if (!hasFinalResponse && toolCalls.length > 0) {
-      fullResponse = "I executed the following actions:\n" + toolCalls.join("\n");
+      fullResponse = "✅ Actions completed:\n" + toolCalls.join("\n");
     }
 
     res.json({
-      response: fullResponse || "No response generated.",
+      response: fullResponse || "I processed your request, but no output was generated.",
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       threadId,
     });
   } catch (error) {
-    console.error("Error:", error.message);
-    res.status(500).json({ error: error.message });
+    console.error("Chat error:", error.message);
+    res.status(500).json({ error: "Agent execution failed: " + error.message });
   }
 });
+
+// ==================== OTHER API ROUTES (unchanged) ====================
 
 const roleForDepartment = (department) => {
   const map = {
@@ -992,12 +725,10 @@ app.get("/api/employees", async (req, res) => {
       Employee.find().sort({ department: 1, name: 1 }).lean(),
       Project.find().lean(),
     ]);
-
     const normalized = employees.map((emp) => {
       const assignedProjectNames = projects
         .filter((proj) => (proj.team || []).includes(emp.name))
         .map((proj) => proj.name);
-
       return {
         id: emp._id.toString(),
         name: emp.name,
@@ -1014,7 +745,6 @@ app.get("/api/employees", async (req, res) => {
         joinedDate: emp.createdAt ? emp.createdAt.toISOString() : new Date().toISOString(),
       };
     });
-
     res.json(normalized);
   } catch (error) {
     console.error('Error fetching employees:', error);
@@ -1028,9 +758,7 @@ app.get("/api/projects", async (req, res) => {
       Project.find().sort({ createdAt: -1 }).lean(),
       Employee.find().lean(),
     ]);
-
     const nameToId = new Map(employees.map((emp) => [emp.name, emp._id.toString()]));
-
     const normalized = projects.map((proj) => ({
       id: proj._id.toString(),
       name: proj.name,
@@ -1045,7 +773,6 @@ app.get("/api/projects", async (req, res) => {
       timeline: proj.timeline || 'TBD',
       budget: proj.budget || '$0',
     }));
-
     res.json(normalized);
   } catch (error) {
     console.error('Error fetching projects:', error);
@@ -1057,36 +784,28 @@ app.post("/api/projects/:projectId/assign-employee", async (req, res) => {
   try {
     const { projectId } = req.params;
     const { employeeId } = req.body;
-
-    if (!employeeId) {
-      return res.status(400).json({ error: 'employeeId is required' });
-    }
-
+    if (!employeeId) return res.status(400).json({ error: 'employeeId required' });
     const [project, employee] = await Promise.all([
       Project.findById(projectId),
       Employee.findById(employeeId),
     ]);
-
     if (!project) return res.status(404).json({ error: 'Project not found' });
     if (!employee) return res.status(404).json({ error: 'Employee not found' });
-
     if (!project.team.includes(employee.name)) {
       project.team.push(employee.name);
       if (project.status === 'planning') project.status = 'active';
       await project.save();
     }
-
     employee.workload = Math.min(100, employee.workload + 25);
     await employee.save();
-
     res.json({
       message: `${employee.name} assigned to ${project.name}`,
       project: { id: project._id.toString(), name: project.name, team: project.team, status: project.status },
       employee: { id: employee._id.toString(), name: employee.name, workload: employee.workload },
     });
   } catch (error) {
-    console.error('Error assigning employee to project:', error);
-    res.status(500).json({ error: 'Unable to assign employee to project' });
+    console.error('Error assigning employee:', error);
+    res.status(500).json({ error: 'Unable to assign employee' });
   }
 });
 
