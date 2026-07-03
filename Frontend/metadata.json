@@ -1,0 +1,6 @@
+{
+  "name": "HR Team Builder AI",
+  "description": "A highly polished, intelligent HR workspace and chat assistant to manage projects, find employees, and construct balanced high-performing teams with Groq.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GROQ_API"]
+}
