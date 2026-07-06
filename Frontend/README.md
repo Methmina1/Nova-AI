@@ -15,7 +15,7 @@ View your app in AI Studio: https://ai.studio/apps/2678483e-5548-41eb-9cc7-18fee
 
 1. Install dependencies:
    `npm install`
-2. Optionally set the `GROQ_API_KEY` in [.env.local](.env.local) to enable Groq direct mode for the frontend server.
+2. Optionally set the `DEEPSEEK_API_KEY` in [.env.local](.env.local) to enable Groq direct mode for the frontend server.
 3. Ensure the backend is running and accessible via `BACKEND_API_URL` if you are using a separate API server.
 4. Run the app:
    `npm run dev`

@@ -555,12 +555,12 @@ const autoAssignTasksTool = tool(
 
 // ==================== AI AGENT SETUP ====================
 
-if (!process.env.GROQ_API_KEY) {
-  console.error("❌ GROQ_API_KEY missing. Set it in .env");
+if (!process.env.DEEPSEEK_API_KEY) {
+  console.error("❌ DEEPSEEK_API_KEY missing. Set it in .env");
   process.exit(1);
 }
 
-const SYSTEM_PROMPT = `You are HR Team Builder AI, a corporate staffing consultant.
+const SYSTEM_PROMPT = `You are Nova. The corporate staffing consultant and HR Team Builder AI.
 
 CRITICAL RULES:
 1. **Always use a tool** to get real data. Never guess or invent employees/projects/skills.
@@ -581,10 +581,21 @@ CRITICAL RULES:
 6. **Do not ask for clarification** unless absolutely necessary. Use list_projects or list_employees to discover available data.
 7. **Do not perform multi‑step reasoning** inside a single response. If you need to do multiple actions, call tools sequentially but avoid loops.`;
 
-const llm = new ChatGroq({
-  model: "openai/gpt-oss-120b",
-  apiKey: process.env.GROQ_API_KEY,
+// const llm = new ChatGroq({
+//   model: "openai/gpt-oss-120b",
+//   apiKey: process.env.DEEPSEEK_API_KEY,   // ← line 586: wrong key type for this provider
+//   temperature: 0,
+// });
+
+import { ChatOpenAI } from "@langchain/openai";
+
+const llm = new ChatOpenAI({
+  model: "deepseek-chat",
+  apiKey: process.env.DEEPSEEK_API_KEY,
   temperature: 0,
+  configuration: {
+    baseURL: "https://api.deepseek.com/v1",
+  },
 });
 
 const tools = [
