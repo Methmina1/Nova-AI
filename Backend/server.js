@@ -35,40 +35,36 @@ console.log("✅ Database connected");
 
 // ==================== TOOLS ====================
 
-// 1. find_employees (OR) – kept for backward compatibility
+// Helper: format employee list as bullet points
+function formatEmployees(employees) {
+  if (!employees.length) return "No employees found.";
+  return employees.map(emp =>
+    `- ${emp.name} (${emp.department}) – Skills: ${emp.skills.join(", ")} – Workload: ${emp.workload}% (Availability: ${100 - emp.workload}%)`
+  ).join("\n");
+}
+
+// 1. find_employees (OR)
 const findEmployeesTool = tool(
   async ({ skills, maxWorkload = 100 }) => {
     try {
       const skillsArray = Array.isArray(skills) ? skills : [skills];
       const employees = await findEmployees(skillsArray, maxWorkload);
-      if (employees.length === 0) return "No employees found with the specified skills.";
-      return JSON.stringify(
-        employees.map(emp => ({
-          id: emp._id.toString(),
-          name: emp.name,
-          department: emp.department,
-          skills: emp.skills,
-          workload: `${emp.workload}%`,
-          availability: `${100 - emp.workload}%`,
-          email: emp.email,
-        })),
-        null, 2
-      );
+      return formatEmployees(employees);
     } catch (error) {
-      return `Error finding employees: ${error.message}`;
+      return `Error: ${error.message}`;
     }
   },
   {
     name: "find_employees",
-    description: "Find employees with at least one of the given skills (OR logic).",
+    description: "Find employees with at least one of the given skills (OR). Returns a human‑readable list.",
     schema: z.object({
-      skills: z.array(z.string()).describe("Array of skills (e.g., ['React', 'Node.js'])"),
+      skills: z.array(z.string()),
       maxWorkload: z.number().optional().default(100),
     }),
   }
 );
 
-// 2. find_employees_exact (AND) – for multi‑skill queries
+// 2. find_employees_exact (AND)
 const findEmployeesExactTool = tool(
   async ({ skills, maxWorkload = 100 }) => {
     try {
@@ -83,30 +79,17 @@ const findEmployeesExactTool = tool(
         .sort({ workload: 1 })
         .limit(20)
         .lean();
-      if (employees.length === 0) {
-        return `No employees found with all of these skills: ${clean.join(", ")}`;
-      }
-      return JSON.stringify(
-        employees.map(emp => ({
-          id: emp._id.toString(),
-          name: emp.name,
-          department: emp.department,
-          skills: emp.skills,
-          workload: `${emp.workload}%`,
-          availability: `${100 - emp.workload}%`,
-          email: emp.email,
-        })),
-        null, 2
-      );
+      if (!employees.length) return `No employees found with all skills: ${clean.join(", ")}`;
+      return formatEmployees(employees);
     } catch (error) {
       return `Error: ${error.message}`;
     }
   },
   {
     name: "find_employees_exact",
-    description: "Find employees who possess ALL specified skills (AND logic). Use for queries like 'React and Python'.",
+    description: "Find employees who possess ALL specified skills (AND). Returns a human‑readable list.",
     schema: z.object({
-      skills: z.array(z.string()).describe("All skills the employee must have"),
+      skills: z.array(z.string()),
       maxWorkload: z.number().optional().default(100),
     }),
   }
@@ -119,7 +102,7 @@ const addEmployeeTool = tool(
       const existing = await Employee.findOne({ $or: [{ email: email || null }, { name, department }] });
       if (existing) return `Employee "${name}" already exists (${existing.department}).`;
       const employee = await Employee.create({ name, department, skills, workload, email: email || undefined });
-      return `✅ Employee "${employee.name}" added.\nDepartment: ${employee.department}\nSkills: ${employee.skills.join(", ") || "None"}\nWorkload: ${employee.workload}%`;
+      return `✅ Added ${employee.name} (${employee.department}) – Skills: ${employee.skills.join(", ") || "None"} – Workload: ${employee.workload}%`;
     } catch (error) {
       return `Error: ${error.message}`;
     }
@@ -151,7 +134,7 @@ const updateEmployeeTool = tool(
       if (Object.keys(updates).length === 0) return "No fields to update.";
       const employee = await Employee.findOneAndUpdate(query, updates, { new: true, runValidators: true });
       if (!employee) return `Employee "${employee_name}" not found.`;
-      return `✅ Updated ${employee.name}.\nDepartment: ${employee.department}\nSkills: ${employee.skills.join(", ") || "None"}\nWorkload: ${employee.workload}%\nEmail: ${employee.email || "Not set"}`;
+      return `✅ Updated ${employee.name} – Dept: ${employee.department} – Skills: ${employee.skills.join(", ") || "None"} – Workload: ${employee.workload}% – Email: ${employee.email || "Not set"}`;
     } catch (error) {
       return `Error: ${error.message}`;
     }
@@ -178,7 +161,7 @@ const deleteEmployeeTool = tool(
       const assigned = await Project.find({ $or: [{ team: employee_name }, { "tasks.assigned_to": employee_name }] });
       if (assigned.length > 0) {
         const names = assigned.map(p => p.name).join(", ");
-        return `⚠️ Cannot delete - assigned to projects: ${names}. Remove first.`;
+        return `⚠️ Cannot delete – assigned to projects: ${names}. Remove first.`;
       }
       const result = await Employee.findOneAndDelete(query);
       if (!result) return `Employee "${employee_name}" not found.`;
@@ -203,7 +186,7 @@ const createProjectTool = tool(
     try {
       const project = await createProject({ name, description, required_skills, timeline, budget });
       if (!project) return "Failed to create project (maybe duplicate or invalid).";
-      return `✅ Project "${project.name}" created.\nDescription: ${project.description}\nSkills: ${project.required_skills.join(", ")}`;
+      return `✅ Project "${project.name}" created.\nDescription: ${project.description}\nRequired Skills: ${project.required_skills.join(", ")}`;
     } catch (error) {
       return `Error: ${error.message}`;
     }
@@ -240,7 +223,7 @@ const updateProjectTool = tool(
       if (Object.keys(updates).length === 0) return "No fields to update.";
       const project = await Project.findOneAndUpdate(query, updates, { new: true, runValidators: true });
       if (!project) return `Project "${project_name}" not found.`;
-      return `✅ Updated "${project.name}".\nStatus: ${project.status}\nSkills: ${project.required_skills.join(", ")}`;
+      return `✅ Updated "${project.name}" – Status: ${project.status} – Skills: ${project.required_skills.join(", ")}`;
     } catch (error) {
       return `Error: ${error.message}`;
     }
@@ -340,17 +323,13 @@ const getProjectStatusTool = tool(
     try {
       const project = await getProjectStatus(project_name);
       if (!project) return `Project "${project_name}" not found.`;
-      const status = {
-        id: project._id.toString(),
-        name: project.name,
-        description: project.description,
-        status: project.status,
-        required_skills: project.required_skills,
-        team: project.team,
-        tasks: project.tasks?.map(t => ({ description: t.description, status: t.status, assigned_to: t.assigned_to || "Unassigned" })) || [],
-        created: project.createdAt.toLocaleDateString(),
-      };
-      return JSON.stringify(status, null, 2);
+      const status = `📊 Project: ${project.name}\n` +
+        `Description: ${project.description}\n` +
+        `Status: ${project.status}\n` +
+        `Required Skills: ${project.required_skills.join(", ") || "None"}\n` +
+        `Team: ${project.team.join(", ") || "None"}\n` +
+        `Tasks:\n${project.tasks?.map((t, i) => `  ${i+1}. ${t.description} (${t.status}) – Assigned to: ${t.assigned_to || "Unassigned"}`).join("\n") || "  None"}`;
+      return status;
     } catch (error) {
       return `Error: ${error.message}`;
     }
@@ -465,7 +444,7 @@ const proposeTeamTool = tool(
       const result = await proposeTeamSimple(project_description);
       if (!result.success) return `No suitable team found: ${result.message}`;
       const teamInfo = result.proposedTeam.map(emp =>
-        `- ${emp.name} (${emp.matchScore}% match): ${emp.matchingSkills.join(", ")}`
+        `- ${emp.name} (${emp.matchScore}% match, ${emp.department}): ${emp.matchingSkills.join(", ")} – Workload ${emp.workload}%`
       ).join("\n");
       return `💡 Team Proposal (${result.skillsCoverage}% coverage):\n${teamInfo}\nRequired Skills: ${result.requiredSkills.join(", ")}`;
     } catch (error) {
@@ -488,7 +467,7 @@ const listProjectsTool = tool(
       const projects = await Project.find().sort({ createdAt: -1 }).lean();
       if (projects.length === 0) return "No projects found.";
       const list = projects.map((p, i) =>
-        `${i+1}. ${p.name} (${p.status}) - Team: ${p.team.join(", ") || "None"} - Tasks: ${p.tasks?.length || 0}`
+        `${i+1}. ${p.name} (${p.status}) – Team: ${p.team.join(", ") || "None"} – Tasks: ${p.tasks?.length || 0}`
       ).join("\n");
       return `📂 All Projects (${projects.length}):\n${list}`;
     } catch (error) {
@@ -509,7 +488,7 @@ const listEmployeesTool = tool(
       const employees = await Employee.find().sort({ department: 1, name: 1 }).lean();
       if (employees.length === 0) return "No employees found.";
       const list = employees.map(emp =>
-        `- ${emp.name} (${emp.department}): ${emp.skills.join(", ")} - ${emp.workload}% workload`
+        `- ${emp.name} (${emp.department}) – Skills: ${emp.skills.join(", ")} – Workload: ${emp.workload}%`
       ).join("\n");
       return `👨‍💼 All Employees (${employees.length}):\n${list}`;
     } catch (error) {
@@ -523,7 +502,7 @@ const listEmployeesTool = tool(
   }
 );
 
-// 19. auto_assign_tasks (bulk assignment + status update)
+// 19. auto_assign_tasks
 const autoAssignTasksTool = tool(
   async ({ project_name }) => {
     try {
@@ -557,7 +536,7 @@ const autoAssignTasksTool = tool(
         task.status = "in-progress";
         best.workload = Math.min(100, best.workload + 10);
         await best.save();
-        results.push(`✅ "${task.description}" → ${best.name} (workload ${best.workload}%)`);
+        results.push(`✅ "${task.description}" → ${best.name} (workload now ${best.workload}%)`);
       }
       await project.save();
       return `Auto‑assignment done for "${project_name}":\n${results.join("\n")}`;
@@ -585,18 +564,22 @@ const SYSTEM_PROMPT = `You are HR Team Builder AI, a corporate staffing consulta
 
 CRITICAL RULES:
 1. **Always use a tool** to get real data. Never guess or invent employees/projects/skills.
-2. **Prefer the most specific tool** for the user's request:
-   - "update project status" → update_project
-   - "delete project" → delete_project
-   - "assign all tasks automatically" → auto_assign_tasks
-   - "find employees with React and Python" → find_employees_exact
-   - "find employees with React or Python" → find_employees
-   - "propose a team" → propose_team
-3. **After a tool returns a result**, respond concisely with the information.
-4. **Do not ask for clarification** unless absolutely necessary.
-5. **If you are unsure**, call list_projects or list_employees to see what's available.
-6. **Do not perform multi‑step reasoning** — each tool call should solve a specific sub‑task. If you need to perform multiple actions, call them in sequence but avoid loops.
-7. **End your response** with a JSON block if you recommend specific employees/projects (using ids from tool output).`;
+2. **Do NOT output raw JSON** in your main response. Always respond with human‑readable text (bullet points, tables, sentences).
+3. **Only include a JSON block at the very end** if you are recommending specific employees/projects. Use the format:
+   \`\`\`json-talent-recommendation
+   { "employeeIds": ["id1", "id2"], "projectIds": ["pid1"] }
+   \`\`\`
+   This block is optional and should contain only the IDs from the tool results.
+4. **Prefer the most specific tool**:
+   - update project → update_project
+   - delete project → delete_project
+   - assign all tasks → auto_assign_tasks
+   - find employees with React and Python → find_employees_exact
+   - find employees with React or Python → find_employees
+   - propose a team → propose_team
+5. **After a tool returns a result**, present it clearly and concisely. Do not repeat the tool's output verbatim if it's already well‑formatted.
+6. **Do not ask for clarification** unless absolutely necessary. Use list_projects or list_employees to discover available data.
+7. **Do not perform multi‑step reasoning** inside a single response. If you need to do multiple actions, call tools sequentially but avoid loops.`;
 
 const llm = new ChatGroq({
   model: "openai/gpt-oss-120b",
@@ -648,7 +631,7 @@ app.post("/api/chat", async (req, res) => {
     const config = {
       configurable: {
         thread_id: threadId,
-        recursion_limit: 10, // prevent infinite loops
+        recursion_limit: 10,
       },
     };
 
@@ -688,6 +671,11 @@ app.post("/api/chat", async (req, res) => {
     })();
 
     await Promise.race([streamPromise, timeoutPromise]);
+
+    // If the response is just JSON (or starts with {), wrap it to be readable.
+    if (fullResponse.trim().startsWith("{") || fullResponse.trim().startsWith("[")) {
+      fullResponse = "Here is the data you requested:\n\n```json\n" + fullResponse + "\n```";
+    }
 
     if (!hasFinalResponse && toolCalls.length > 0) {
       fullResponse = "✅ Actions completed:\n" + toolCalls.join("\n");
